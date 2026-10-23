@@ -1,0 +1,52 @@
+name: Build and Release
+
+on:
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+jobs:
+  build:
+    runs-on: macos-latest
+    steps:
+      - name: Checkout Code
+        uses: actions/checkout@v4
+
+      - name: Compile Universal Binary & Bundle App
+        run: |
+          mkdir -p build/"Remote Guardian.app"/Contents/MacOS
+          mkdir -p build/"Remote Guardian.app"/Contents/Resources
+
+          # Build for Apple Silicon (arm64)
+          swiftc -target arm64-apple-macos13.0 -O src/main.swift -o build/guardian-arm64
+          # Build for Intel (x86_64)
+          swiftc -target x86_64-apple-macos13.0 -O src/main.swift -o build/guardian-x86_64
+
+          # Create Universal Binary
+          lipo -create \
+            -output build/"Remote Guardian.app"/Contents/MacOS/"Remote Guardian" \
+            build/guardian-arm64 \
+            build/guardian-x86_64
+
+          # Copy Info.plist
+          cp resources/Info.plist build/"Remote Guardian.app"/Contents/Info.plist
+
+          # Ad-hoc sign
+          codesign --force --deep --sign - build/"Remote Guardian.app"
+
+          # Package with ditto to preserve macOS bundle structure & signatures
+          ditto -c -k --keepParent build/"Remote Guardian.app" build/Remote-Guardian-Universal.zip
+
+      - name: Upload Build Artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: Remote-Guardian-Universal
+          path: build/Remote-Guardian-Universal.zip
+
+      - name: Publish GitHub Release
+        if: startsWith(github.ref, 'refs/tags/v')
+        uses: softprops/action-gh-release@v2
+        with:
+          files: build/Remote-Guardian-Universal.zip
+          generate_release_notes: true

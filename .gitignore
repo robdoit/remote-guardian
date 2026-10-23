@@ -1,0 +1,6 @@
+.DS_Store
+*.app
+build/
+dist/
+*.o
+*.swp

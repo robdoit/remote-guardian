@@ -1,0 +1,307 @@
+#!/usr/bin/env bash
+# remote-guardian: Keep Mac awake with lid closed for remote development & background tasks
+
+set -e
+
+RED='\033[0;31m'
+GREEN='\033[0;32m'
+YELLOW='\033[1;33m'
+BLUE='\033[0;34m'
+BOLD='\033[1m'
+NC='\033[0m' # No Color
+
+STATE_FILE="$HOME/.remote-guardian.state"
+
+is_sleep_disabled() {
+    if /usr/bin/pmset -g | grep -qE "SleepDisabled[[:space:]]+1"; then
+        return 0
+    else
+        return 1
+    fi
+}
+
+is_touchid_configured() {
+    if /usr/bin/sudo -n -l /usr/bin/pmset disablesleep 0 >/dev/null 2>&1; then
+        return 0
+    else
+        return 1
+    fi
+}
+
+setup_touchid() {
+    echo -e "${BOLD}${BLUE}Configuring Touch ID & One-Click Toggle for Remote Guardian...${NC}"
+    sudo /bin/bash -c "
+        mkdir -p /etc/sudoers.d &&
+        printf '%s\n' '%admin ALL=(root) NOPASSWD: /usr/bin/pmset disablesleep 1, /usr/bin/pmset disablesleep 0' > /tmp/rg_sudoers_tmp &&
+        chown root:wheel /tmp/rg_sudoers_tmp &&
+        chmod 0440 /tmp/rg_sudoers_tmp &&
+        /usr/sbin/visudo -cf /tmp/rg_sudoers_tmp >/dev/null 2>&1 &&
+        mv /tmp/rg_sudoers_tmp /etc/sudoers.d/remote-guardian &&
+        if [ ! -f /etc/pam.d/sudo_local ]; then
+            printf '# sudo_local: Touch ID for sudo\nauth       sufficient     pam_tid.so\n' > /etc/pam.d/sudo_local &&
+            chown root:wheel /etc/pam.d/sudo_local &&
+            chmod 0444 /etc/pam.d/sudo_local
+        fi
+    "
+    echo -e "${GREEN}${BOLD}✓ Touch ID & Instant Toggle configured!${NC} You will never have to type your password again."
+}
+
+check_telemetry() {
+    local batt_info
+    batt_info=$(/usr/bin/pmset -g batt 2>/dev/null || true)
+    local pct
+    pct=$(echo "$batt_info" | grep -oE "[0-9]+%" | head -n1 || true)
+    local pct_str=""
+    if [ -n "$pct" ]; then
+        pct_str=" ($pct)"
+    fi
+
+    if echo "$batt_info" | grep -q "Battery Power"; then
+        echo -e "Power:      ${YELLOW}🔋 On Battery${pct_str} — Plug into AC electricity before closing lid!${NC}"
+    elif echo "$batt_info" | grep -q "AC Power"; then
+        echo -e "Power:      ${GREEN}⚡ Connected to AC Electricity${pct_str}${NC}"
+    fi
+
+    if is_touchid_configured; then
+        echo -e "Auth Mode:  ${GREEN}👆 Touch ID / Passwordless Ready ✓${NC}"
+    else
+        echo -e "Auth Mode:  ${YELLOW}🔑 Standard Password (Run 'remote-guardian touchid' for Touch ID)${NC}"
+    fi
+}
+
+remaining_time_str() {
+    if [ -f "$STATE_FILE" ]; then
+        local exp
+        exp=$(grep "^EXPIRES_AT=" "$STATE_FILE" 2>/dev/null | cut -d= -f2 | tr -dc "0-9" || true)
+        if [ -n "$exp" ] && [ "$exp" -gt 0 ]; then
+            local now
+            now=$(date +%s)
+            local diff=$((exp - now))
+            if [ "$diff" -gt 0 ]; then
+                local hrs=$((diff / 3600))
+                local mins=$(((diff % 3600) / 60))
+                if [ "$hrs" -gt 0 ]; then
+                    echo "${hrs}h ${mins}m remaining"
+                else
+                    [ "$mins" -lt 1 ] && mins=1
+                    echo "${mins}m remaining"
+                fi
+            fi
+        fi
+    fi
+}
+
+status() {
+    echo -e "${BOLD}${BLUE}=== Remote Guardian Status ===${NC}"
+    if is_sleep_disabled; then
+        local rem
+        rem=$(remaining_time_str)
+        if [ -n "$rem" ]; then
+            echo -e "Status:     ${GREEN}${BOLD}ACTIVE — Clamshell Sleep Disabled ($rem)${NC}"
+        else
+            echo -e "Status:     ${GREEN}${BOLD}ACTIVE — Clamshell Sleep Disabled (Indefinite)${NC}"
+        fi
+        if [ -f "$STATE_FILE" ]; then
+            local guard
+            guard=$(grep "^UNPLUG_GUARD=" "$STATE_FILE" 2>/dev/null | cut -d= -f2 | tr -dc "0-9" || true)
+            if [ "${guard:-1}" = "1" ]; then
+                echo -e "Protection: ${GREEN}🛡️  Backpack Guard ON (Auto-sleeps if unplugged or ≤15% battery)${NC}"
+            else
+                echo -e "Protection: ${YELLOW}⚠️  Backpack Guard OFF (Auto-sleeps only at ≤15% battery)${NC}"
+            fi
+        fi
+    else
+        echo -e "Status:     ${RED}${BOLD}INACTIVE — Standard macOS Sleep Enabled${NC}"
+    fi
+    check_telemetry
+}
+
+parse_duration() {
+    local arg="$1"
+    if [ -z "$arg" ]; then
+        echo 0
+        return
+    fi
+    local num
+    num=$(echo "$arg" | tr -dc "0-9")
+    if [ -z "$num" ]; then
+        echo 0
+        return
+    fi
+    case "$arg" in
+        *h|*hr|*hrs|*hour|*hours)
+            echo $((num * 3600))
+            ;;
+        *m|*min|*mins|*minute|*minutes)
+            echo $((num * 60))
+            ;;
+        *s|*sec|*secs)
+            echo "$num"
+            ;;
+        *)
+            if [ "$num" -le 24 ]; then
+                echo $((num * 3600))
+            else
+                echo $((num * 60))
+            fi
+            ;;
+    esac
+}
+
+start_guardian_loop() {
+    nohup /bin/bash -c "
+        STATE_FILE=\"$STATE_FILE\"
+        cleanup() {
+            /usr/bin/sudo -n /usr/bin/pmset disablesleep 0 >/dev/null 2>&1
+            rm -f \"\$STATE_FILE\" >/dev/null 2>&1
+            exit 0
+        }
+        trap cleanup EXIT INT TERM
+        WAS_AC=0
+        if /usr/bin/pmset -g batt | grep -q \"AC Power\"; then WAS_AC=1; fi
+        while [ -f \"\$STATE_FILE\" ]; do
+            if ! /usr/bin/pmset -g | grep -qE \"SleepDisabled[[:space:]]+1\"; then
+                rm -f \"\$STATE_FILE\" >/dev/null 2>&1
+                exit 0
+            fi
+            EXP=\$(grep \"^EXPIRES_AT=\" \"\$STATE_FILE\" 2>/dev/null | cut -d= -f2 | tr -dc \"0-9\")
+            GUARD=\$(grep \"^UNPLUG_GUARD=\" \"\$STATE_FILE\" 2>/dev/null | cut -d= -f2 | tr -dc \"0-9\")
+            NOW=\$(date +%s)
+            if [ -n \"\$EXP\" ] && [ \"\$EXP\" -gt 0 ] && [ \"\$NOW\" -ge \"\$EXP\" ]; then
+                cleanup
+            fi
+            BATT_OUT=\$(/usr/bin/pmset -g batt 2>/dev/null)
+            if echo \"\$BATT_OUT\" | grep -q \"AC Power\"; then
+                WAS_AC=1
+            elif echo \"\$BATT_OUT\" | grep -q \"Battery Power\"; then
+                if [ \"\${GUARD:-1}\" = \"1\" ] && [ \"\$WAS_AC\" = \"1\" ]; then
+                    cleanup
+                fi
+                PCT=\$(echo \"\$BATT_OUT\" | grep -oE \"[0-9]+%\" | head -n1 | tr -dc \"0-9\")
+                if [ -n \"\$PCT\" ] && [ \"\$PCT\" -le 15 ]; then
+                    cleanup
+                fi
+            fi
+            sleep 1
+        done
+        cleanup
+    " >/dev/null 2>&1 </dev/null &
+}
+
+enable_keepawake() {
+    local duration_sec=0
+    local unplug_guard=1
+
+    shift || true
+    while [ $# -gt 0 ]; do
+        case "$1" in
+            --allow-battery|--no-guard)
+                unplug_guard=0
+                ;;
+            *)
+                duration_sec=$(parse_duration "$1")
+                ;;
+        esac
+        shift || true
+    done
+
+    local expires_at=0
+    if [ "$duration_sec" -gt 0 ]; then
+        expires_at=$(($(date +%s) + duration_sec))
+    fi
+
+    echo -e "${BOLD}${BLUE}Enabling Lid-Closed Keep-Awake with Remote Guardian...${NC}"
+    check_telemetry
+    echo ""
+
+    cat << EOF > "$STATE_FILE"
+EXPIRES_AT=$expires_at
+UNPLUG_GUARD=$unplug_guard
+MIN_BATTERY=15
+EOF
+
+    if is_sleep_disabled; then
+        echo -e "${GREEN}${BOLD}✓ Updated active Keep-Awake session settings!${NC}"
+        status
+        return 0
+    fi
+
+    if ! is_touchid_configured; then
+        setup_touchid
+    fi
+
+    /usr/bin/sudo -n /usr/bin/pmset disablesleep 1
+    start_guardian_loop
+
+    if is_sleep_disabled; then
+        echo -e "\n${GREEN}${BOLD}✓ Remote Guardian is now ACTIVE!${NC}"
+        echo -e "You can close your laptop lid and your remote session or background tasks will stay alive."
+        if [ "$unplug_guard" = "1" ]; then
+            echo -e "${GREEN}🛡️  Backpack Guard is ON: Unplugging your charger will automatically restore normal sleep.${NC}"
+        fi
+        echo -e "To turn off anytime: ${BOLD}remote-guardian off${NC}\n"
+    else
+        rm -f "$STATE_FILE"
+        echo -e "\n${RED}Failed to verify sleep settings. Please run 'pmset -g' to check.${NC}"
+    fi
+}
+
+disable_keepawake() {
+    echo -e "${BOLD}${BLUE}Restoring standard macOS sleep behavior...${NC}"
+    rm -f "$STATE_FILE"
+
+    if is_touchid_configured; then
+        /usr/bin/sudo -n /usr/bin/pmset disablesleep 0
+    elif is_sleep_disabled; then
+        setup_touchid
+        /usr/bin/sudo -n /usr/bin/pmset disablesleep 0
+    fi
+
+    if ! is_sleep_disabled; then
+        echo -e "${GREEN}${BOLD}✓ Normal sleep restored!${NC} Your Mac will now sleep normally when closing the lid."
+    else
+        echo -e "${YELLOW}Please verify settings with: pmset -g${NC}"
+    fi
+}
+
+launch_app() {
+    if [ -d "$HOME/Applications/Remote Guardian.app" ]; then
+        open "$HOME/Applications/Remote Guardian.app"
+        echo "Launched Remote Guardian in menu bar."
+    elif [ -d "/Applications/Remote Guardian.app" ]; then
+        open "/Applications/Remote Guardian.app"
+        echo "Launched Remote Guardian in menu bar."
+    else
+        echo "App not found in ~/Applications or /Applications. Run ./install.sh to build it."
+    fi
+}
+
+case "$1" in
+    on|enable|start)
+        enable_keepawake "$@"
+        ;;
+    off|disable|stop)
+        disable_keepawake
+        ;;
+    touchid|setup-touchid)
+        setup_touchid
+        ;;
+    status)
+        status
+        ;;
+    app|gui|menu)
+        launch_app
+        ;;
+    *)
+        echo -e "${BOLD}Usage:${NC} remote-guardian [on [duration] [--allow-battery] | off | touchid | status | menu]"
+        echo "  Examples:"
+        echo "    remote-guardian on          # Keep awake indefinitely (auto-sleeps if unplugged)"
+        echo "    remote-guardian on 2h       # Keep awake for 2 hours"
+        echo "    remote-guardian off         # Restore normal sleep immediately"
+        echo "    remote-guardian touchid     # One-time setup for Touch ID & Instant Toggle"
+        echo "    remote-guardian status      # Show clamshell sleep and power status"
+        echo "    remote-guardian menu        # Launch the macOS Menu Bar app"
+        echo ""
+        status
+        ;;
+esac
