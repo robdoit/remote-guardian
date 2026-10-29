@@ -53,6 +53,10 @@ chmod +x "$CLI_DEST"
 
 echo "CLI tool installed to $CLI_DEST"
 
+# Register in Login Items so it persists in the menu bar across restarts
+echo "Registering Launch at Login..."
+osascript -e "tell application \"System Events\" to if not (exists (login item \"$APP_NAME\")) then make login item at end with properties {path:\"$APP_BUNDLE\", hidden:false, name:\"$APP_NAME\"}" 2>/dev/null || true
+
 # Open the app
 echo "Launching Menu Bar App..."
 open "$APP_BUNDLE"

@@ -65,7 +65,8 @@ class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
         let power = getPowerState()
         let remaining = remainingTimeString()
         let touchIDReady = isPasswordlessPmsetConfigured()
-        populateMenu(menu, active: active, power: power, remaining: remaining, touchIDReady: touchIDReady)
+        let launchAtLogin = isLaunchAtLoginEnabled()
+        populateMenu(menu, active: active, power: power, remaining: remaining, touchIDReady: touchIDReady, launchAtLogin: launchAtLogin)
     }
 
     func menuDidClose(_ menu: NSMenu) {
@@ -228,6 +229,7 @@ class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
         let power = getPowerState()
         let remaining = remainingTimeString()
         let touchIDReady = isPasswordlessPmsetConfigured()
+        let launchAtLogin = isLaunchAtLoginEnabled()
 
         DispatchQueue.main.async { [weak self] in
             guard let self = self else { return }
@@ -244,7 +246,7 @@ class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
             }
 
             if !self.isMenuOpen, let menu = self.statusItem.menu {
-                self.populateMenu(menu, active: active, power: power, remaining: remaining, touchIDReady: touchIDReady)
+                self.populateMenu(menu, active: active, power: power, remaining: remaining, touchIDReady: touchIDReady, launchAtLogin: launchAtLogin)
             }
         }
     }
@@ -254,7 +256,8 @@ class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
         active: Bool,
         power: (isAC: Bool, percentage: Int?, description: String),
         remaining: String?,
-        touchIDReady: Bool
+        touchIDReady: Bool,
+        launchAtLogin: Bool
     ) {
         menu.removeAllItems()
 
@@ -350,6 +353,15 @@ class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
             menu.addItem(touchIDItem)
         }
 
+        let launchItem = NSMenuItem(
+            title: "🚀 Launch at Login",
+            action: #selector(toggleLaunchAtLogin),
+            keyEquivalent: ""
+        )
+        launchItem.target = self
+        launchItem.state = launchAtLogin ? .on : .off
+        menu.addItem(launchItem)
+
         menu.addItem(NSMenuItem.separator())
 
         // 5. Live Power & Safety Telemetry
@@ -397,6 +409,25 @@ class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
                 self.updateStatus()
             }
         }
+    }
+
+    func isLaunchAtLoginEnabled() -> Bool {
+        let script = "tell application \"System Events\" to get (exists (login item \"Remote Guardian\"))"
+        let out = runCommand("/usr/bin/osascript", arguments: ["-e", script]).trimmingCharacters(in: .whitespacesAndNewlines)
+        return out == "true"
+    }
+
+    @objc func toggleLaunchAtLogin() {
+        let isEnabled = isLaunchAtLoginEnabled()
+        let appPath = Bundle.main.bundlePath
+        let script: String
+        if isEnabled {
+            script = "tell application \"System Events\" to delete (every login item whose name is \"Remote Guardian\")"
+        } else {
+            script = "tell application \"System Events\" to make login item at end with properties {path:\"\(appPath)\", hidden:false, name:\"Remote Guardian\"}"
+        }
+        _ = runCommand("/usr/bin/osascript", arguments: ["-e", script])
+        updateStatus()
     }
 
     func authenticateWithTouchID(reason: String, completion: @escaping (Bool) -> Void) {

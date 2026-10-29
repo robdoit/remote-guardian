@@ -24,14 +24,17 @@ fi
 # 3. Terminate running instance
 pkill -f "Remote Guardian" 2>/dev/null || true
 
-# 4. Remove application bundle
+# 4. Remove from Login Items
+osascript -e 'tell application "System Events" to delete (every login item whose name is "Remote Guardian")' 2>/dev/null || true
+
+# 5. Remove application bundle
 APP_BUNDLE="$HOME/Applications/Remote Guardian.app"
 if [ -d "$APP_BUNDLE" ]; then
     rm -rf "$APP_BUNDLE"
     echo "Removed $APP_BUNDLE"
 fi
 
-# 5. Remove CLI
+# 6. Remove CLI
 for loc in "/opt/homebrew/bin/remote-guardian" "/usr/local/bin/remote-guardian" "$HOME/.local/bin/remote-guardian" "$HOME/bin/remote-guardian"; do
     if [ -f "$loc" ]; then
         rm -f "$loc"
