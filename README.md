@@ -6,7 +6,7 @@ A lightweight, zero-dependency native macOS Menu Bar app and CLI companion engin
 
 ---
 
-## 💡 The Problem
+## The Problem
 
 When you kick off long-running developer tasks and want to monitor or steer them remotely from your phone, tablet, or another machine, closing your MacBook lid immediately kills your session.
 
@@ -19,7 +19,7 @@ Standard tools like `caffeinate` and Mac App Store utilities (like *KeepingYouAw
 
 ---
 
-## 🏆 How Remote Guardian Compares
+## How Remote Guardian Compares
 
 | Feature / Capability | `caffeinate` / *KeepingYouAwake* | *Amphetamine* (App Store) | Other GitHub Wrappers (*Awayke*, *Sleepless*, *LidAwake*) | **⚡ Remote Guardian** |
 | :--- | :---: | :---: | :---: | :---: |
@@ -33,7 +33,7 @@ Standard tools like `caffeinate` and Mac App Store utilities (like *KeepingYouAw
 
 ---
 
-## ✨ Key Engineering Highlights
+## Key Engineering Highlights
 
 ### 1. Ephemeral Guardian Architecture (Single-Auth, Zero Permanent Daemons)
 Most utilities that toggle `pmset disablesleep` either force you to install a permanent privileged root daemon in `/Library/PrivilegedHelperTools`, or prompt for your administrator password **twice** (once to turn ON, and again to turn OFF)—which also means countdown timers fail if your lid is closed when the timer expires!
@@ -43,15 +43,15 @@ Most utilities that toggle `pmset disablesleep` either force you to install a pe
 * That single authorization enables `pmset disablesleep 1` and launches a tiny, self-terminating **Ephemeral Guardian** loop that lives *only* while Keep-Awake is active.
 * When you click **Turn OFF**, when a countdown timer expires while your lid is shut, or when you unplug your charger, the guardian automatically restores `pmset disablesleep 0` and exits cleanly—**with zero second password prompt and zero permanent background daemons.**
 
-### 2. 🛡️ Backpack Guard (Auto-Sleep When Unplugged)
+### 2. Backpack Guard (Auto-Sleep When Unplugged)
 The #1 danger of disabling clamshell sleep on a laptop is forgetting it's enabled, unplugging your MacBook, and sliding it into a backpack where it overheats.
 * With **Backpack Guard** enabled (on by default), the moment you unplug your MagSafe/USB-C power cord to pack up your laptop, the Ephemeral Guardian detects the transition from `AC Power` to `Battery Power` and **automatically restores standard macOS sleep**.
 * Even if you explicitly allow battery operation, a hard **≤15% battery floor** ensures your Mac goes to sleep safely before draining flat.
 
-### 3. ⏱️ Built-in Countdown Timers (`1h`, `2h`, `4h`, `8h`, `Indefinite`)
+### 3. Built-in Countdown Timers (`1h`, `2h`, `4h`, `8h`, `Indefinite`)
 Set a session duration directly from the Menu Bar or CLI (`remote-guardian on 2h`). Because the Ephemeral Guardian manages cleanup internally, timers work reliably even while the laptop lid is closed and locked. You can also update or extend active timers on the fly without re-authenticating.
 
-### 4. ⚡ Live System & Power Telemetry
+### 4. Live System & Power Telemetry
 The Menu Bar dropdown and CLI inspect your system in real time and display:
 * Current power source and exact battery percentage (`⚡ Power: AC Connected (100%)`).
 * Active countdown timer status (`1h`, `2h`, `4h`, `8h`, or `Indefinite`).
